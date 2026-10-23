@@ -72,4 +72,38 @@ public class Calculator {
         }
         return a;
     }
+
+    public int lcm(int a, int b) {
+        if (a == 0 || b == 0) {
+            return 0;
+        }
+        return absolute(a / gcd(a, b) * b);
+    }
+
+    public boolean isEven(int a) {
+        return a % 2 == 0;
+    }
+
+    public long factorial(int n) {
+        if (n < 0) {
+            throw new IllegalArgumentException("Factorial is not defined for negative numbers");
+        }
+        long result = 1;
+        for (int i = 2; i <= n; i++) {
+            result *= i;
+        }
+        return result;
+    }
+
+    public boolean isPrime(int n) {
+        if (n < 2) {
+            return false;
+        }
+        for (int i = 2; (long) i * i <= n; i++) {
+            if (n % i == 0) {
+                return false;
+            }
+        }
+        return true;
+    }
 }

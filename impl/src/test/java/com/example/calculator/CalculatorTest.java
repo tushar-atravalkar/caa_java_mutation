@@ -123,6 +123,28 @@ class CalculatorTest {
     }
 
     @Test
+    void lcm_positiveInputs_returnsLeastCommonMultiple() {
+        assertEquals(12, calculator.lcm(4, 6));
+    }
+
+    @Test
+    void lcm_firstArgZero_returnsZero() {
+        assertEquals(0, calculator.lcm(0, 5));
+    }
+
+    @Test
+    void lcm_secondArgZero_returnsZero() {
+        assertEquals(0, calculator.lcm(5, 0));
+    }
+
+    @Test
+    void lcm_negativeInputs_returnsPositiveLeastCommonMultiple() {
+        assertEquals(12, calculator.lcm(-4, 6));
+        assertEquals(12, calculator.lcm(4, -6));
+        assertEquals(12, calculator.lcm(-4, -6));
+    }
+
+    @Test
     void square_positiveInput_returnsMultipliedValueNotDivisionOrZero() {
         assertEquals(16, calculator.square(4));
     }
