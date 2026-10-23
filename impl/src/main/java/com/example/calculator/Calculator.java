@@ -6,11 +6,11 @@ public class Calculator {
         return a + b;
     }
 
-    public int subtract1(int a, int b) {
+    public int subtract(int a, int b) {
         return a - b;
     }
 
-    public int multiply1(int a, int b) {
+    public int multiply(int a, int b) {
         return a * b;
     }
 
@@ -93,5 +93,17 @@ public class Calculator {
             result *= i;
         }
         return result;
+    }
+
+    public boolean isPrime(int n) {
+        if (n < 2) {
+            return false;
+        }
+        for (int i = 2; (long) i * i <= n; i++) {
+            if (n % i == 0) {
+                return false;
+            }
+        }
+        return true;
     }
 }
