@@ -1,0 +1,75 @@
+package com.example.calculator;
+
+public class Calculator {
+
+    public int add(int a, int b) {
+        return a + b;
+    }
+
+    public int subtract(int a, int b) {
+        return a - b;
+    }
+
+    public int multiply(int a, int b) {
+        return a * b;
+    }
+
+    public double divide(int a, int b) {
+        if (b == 0) {
+            throw new ArithmeticException("Division by zero is not allowed");
+        }
+        return (double) a / b;
+    }
+
+    public int modulo(int a, int b) {
+        if (b == 0) {
+            throw new ArithmeticException("Modulo by zero is not allowed");
+        }
+        return a % b;
+    }
+
+    public int power(int base, int exponent) {
+        if (exponent < 0) {
+            throw new IllegalArgumentException("Exponent must not be negative");
+        }
+        int result = 1;
+        for (int i = 0; i < exponent; i++) {
+            result *= base;
+        }
+        return result;
+    }
+
+    public int absolute(int a) {
+        return a < 0 ? -a : a;
+    }
+
+    public int max(int a, int b) {
+        return a > b ? a : b;
+    }
+
+    public int min(int a, int b) {
+        return a < b ? a : b;
+    }
+
+    public int square(int a) {
+        return a * a;
+    }
+
+    public double squareRoot(int a) {
+        if (a < 0) {
+            throw new IllegalArgumentException("Cannot compute square root of a negative number");
+        }
+        return Math.sqrt(a);
+    }
+
+    public int gcd(int a, int b) {
+        a = absolute(a);
+        b = absolute(b);
+        while (b != 0) {
+            int temp = b;
+            b = a % b;
+            a = temp;
+        }
+        return a;
+    }
+}

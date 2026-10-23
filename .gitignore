@@ -1,0 +1,9 @@
+target/
+.claude/
+unagi.json
+mutation-reports/
+pit-output/
+utils/
+report_backup/
+html_report_changes/
+.scannerwork/
