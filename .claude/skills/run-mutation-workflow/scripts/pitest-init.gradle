@@ -1,0 +1,101 @@
+// Gradle init script used by the mutation agent (pit_parser.run_pit_gradle). It runs PIT on one
+// Gradle project without any change to the team's build files:
+//   ./gradlew <project>:pitest --init-script pitest-init.gradle -PmutationProject=<path> ...
+//
+// - Applies the gradle-pitest-plugin to the target project only, unless the build already
+//   applies it; then the build's own plugin and settings are used and only the values the
+//   agent needs are overridden.
+// - Dependency locking (lockAllConfigurations()) is set to LENIENT for the run, so PIT's own
+//   libraries are allowed while every locked library keeps its locked version. No lockfile is
+//   written.
+// - The plugin comes from the Gradle plugin portal, or from MUTATION_GRADLE_PLUGIN_REPO (a
+//   Maven repository URL, for example the company Artifactory mirror). PIT itself resolves
+//   through the project's own repositories, like any other dependency of the build.
+//
+// Project properties (all set by the agent):
+//   mutationProject      Gradle path of the project to mutate (":" or ":core")
+//   mutationTargets      comma separated classes to mutate (com.acme.Calc,...)
+//   mutationTests        comma separated test class globs to run (com.acme.CalcTest,...)
+//   mutationExcludedTests  comma separated test class globs PIT must not run (need Docker, ...)
+//   mutationReportDir    directory for mutations.xml (no timestamped subdirectory)
+//   mutationJunit5       "true" when the tests run on the JUnit Platform
+//   mutationPitestVersion   optional PIT version (default: the plugin's own)
+//   mutationJunit5PluginVersion  optional pitest-junit5-plugin version
+
+initscript {
+    repositories {
+        def mirror = System.getenv('MUTATION_GRADLE_PLUGIN_REPO')
+        if (mirror) {
+            maven { url = uri(mirror) }
+        } else {
+            gradlePluginPortal()
+        }
+    }
+    dependencies {
+        // 1.19.0 refuses to run below Gradle 8.4; 1.15.0 is the last release for older builds.
+        def current = org.gradle.util.GradleVersion.current()
+        def pluginVersion = current >= org.gradle.util.GradleVersion.version('8.4') ? '1.19.0' : '1.15.0'
+        classpath "info.solidsoft.gradle.pitest:gradle-pitest-plugin:${pluginVersion}"
+    }
+}
+
+def props = gradle.startParameter.projectProperties
+def targetPath = props['mutationProject'] ?: ':'
+def csv = { String key -> (props[key] ?: '').split(',').collect { it.trim() }.findAll { it } }
+
+allprojects { p ->
+    if (p.path != targetPath) {
+        return
+    }
+    p.pluginManager.withPlugin('java') {
+        if (!p.pluginManager.hasPlugin('info.solidsoft.pitest')) {
+            p.pluginManager.apply(info.solidsoft.gradle.pitest.PitestPlugin)
+        }
+    }
+    // Defaults the build may override (set as soon as the plugin is there, before the
+    // build's own pitest { } block runs).
+    p.pluginManager.withPlugin('info.solidsoft.pitest') {
+        def pit = p.extensions.getByName('pitest')
+        if (props['mutationPitestVersion']) {
+            pit.pitestVersion.set(props['mutationPitestVersion'])
+        }
+        if (props['mutationJunit5'] == 'true' && !pit.junit5PluginVersion.isPresent()) {
+            pit.junit5PluginVersion.set(props['mutationJunit5PluginVersion'] ?: '1.2.3')
+        }
+    }
+    // What the agent needs, after the build is evaluated so it wins over the build's settings.
+    p.afterEvaluate {
+        if (!p.pluginManager.hasPlugin('info.solidsoft.pitest')) {
+            throw new GradleException("mutation agent: project ${p.path} has no Java plugin, so PIT cannot run there")
+        }
+        def pit = p.extensions.getByName('pitest')
+        def targets = csv('mutationTargets')
+        if (targets) {
+            pit.targetClasses.set(targets)
+        }
+        def tests = csv('mutationTests')
+        if (tests) {
+            pit.targetTests.set(tests)
+        }
+        def excluded = csv('mutationExcludedTests')
+        if (excluded) {
+            pit.excludedTestClasses.set(excluded)
+        }
+        if (props['mutationReportDir']) {
+            pit.reportDir.set(new File(props['mutationReportDir']))
+        }
+        // PIT puts libraries on the test classpath that the team's gradle.lockfile has never seen
+        // (junit-platform-launcher, ...). With dependency locking on, Gradle refuses them. LENIENT
+        // still pins every locked library to its locked version, so the tests run on the same
+        // classpath as in CI, and only allows the extra ones. This is set here, after evaluation,
+        // because the build's own dependencyLocking { } block runs after the init script. Nothing is
+        // written: the team's gradle.lockfile stays as it is.
+        if (p.dependencyLocking.hasProperty('lockMode')) {
+            p.dependencyLocking.lockMode.set(org.gradle.api.artifacts.dsl.LockMode.LENIENT)
+        }
+        pit.outputFormats.set(['XML'])
+        pit.timestampedReports.set(false)
+        pit.exportLineCoverage.set(false)
+        pit.failWhenNoMutations.set(false)
+    }
+}

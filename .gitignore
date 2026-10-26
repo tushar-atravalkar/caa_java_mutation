@@ -1,5 +1,9 @@
 target/
-.claude/
+.claude/*
+!.claude/skills/
+__pycache__/
+.sonar/mutation-report.json
+MUTATION_AUDIT.log
 unagi.json
 mutation-reports/
 pit-output/

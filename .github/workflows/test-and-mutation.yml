@@ -25,8 +25,14 @@ jobs:
       - name: Run tests
         run: mvn -B test
 
-      - name: Run mutation testing (PIT)
-        run: mvn -B org.pitest:pitest-maven:mutationCoverage
+      - name: Run mutation testing and build Sonar report
+        id: mutation
+        continue-on-error: true
+        run: |
+          python3 .claude/skills/run-mutation-workflow/scripts/run.py \
+            --skip-sonar --skip-engine-check \
+            --base origin/${{ github.base_ref || 'main' }} \
+            --threshold 80
 
       - name: Download SonarQube Scanner
         run: |
@@ -37,6 +43,7 @@ jobs:
           rm sonar-scanner.zip
 
       - name: SonarQube Scan
+        if: always()
         run: |
           ~/.sonar/sonar-scanner-6.1.0.4477-linux-x64/bin/sonar-scanner \
             -Dsonar.projectBaseDir=. \
@@ -44,3 +51,9 @@ jobs:
             -Dsonar.token=${{ secrets.SONAR_TOKEN }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Enforce mutation gate
+        if: steps.mutation.outcome == 'failure'
+        run: |
+          echo "Mutation score is below the threshold (see the mutation step above)."
+          exit 1
