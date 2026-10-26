@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "runId": "run-1792746263",
+    "threshold": 80,
+    "round": 1,
+    "verdict": "PASS",
+    "tools": [
+      "pitest"
+    ],
+    "agentVersion": "unknown",
+    "commit": "841e7063354019d45971cbeda562c762d8387fd0",
+    "scoreBefore": 85.7,
+    "durationSec": 34
+  },
+  "summary": {
+    "overall": {
+      "total": 14,
+      "killed": 12,
+      "timedOut": 0,
+      "memoryError": 0,
+      "survived": 2,
+      "noCoverage": 0,
+      "unknown": 0,
+      "suppressed": 0,
+      "testsExecuted": 25,
+      "testKills": 12
+    },
+    "new": {
+      "total": 14,
+      "killed": 12,
+      "timedOut": 0,
+      "memoryError": 0,
+      "survived": 2,
+      "noCoverage": 0,
+      "unknown": 0,
+      "suppressed": 0,
+      "testsExecuted": 25,
+      "testKills": 12
+    }
+  },
+  "languages": {
+    "java": {
+      "overall": {
+        "total": 14,
+        "killed": 12,
+        "timedOut": 0,
+        "memoryError": 0,
+        "survived": 2,
+        "noCoverage": 0,
+        "unknown": 0,
+        "suppressed": 0,
+        "testsExecuted": 25,
+        "testKills": 12
+      },
+      "new": {
+        "total": 14,
+        "killed": 12,
+        "timedOut": 0,
+        "memoryError": 0,
+        "survived": 2,
+        "noCoverage": 0,
+        "unknown": 0,
+        "suppressed": 0,
+        "testsExecuted": 25,
+        "testKills": 12
+      }
+    }
+  },
+  "files": {
+    "impl/src/main/java/com/example/calculator/Calculator.java": {
+      "language": "java",
+      "changedLines": 7,
+      "lines": 46,
+      "overall": {
+        "total": 14,
+        "killed": 12,
+        "timedOut": 0,
+        "memoryError": 0,
+        "survived": 2,
+        "noCoverage": 0,
+        "unknown": 0,
+        "suppressed": 0,
+        "testsExecuted": 25,
+        "testKills": 12
+      },
+      "new": {
+        "total": 14,
+        "killed": 12,
+        "timedOut": 0,
+        "memoryError": 0,
+        "survived": 2,
+        "noCoverage": 0,
+        "unknown": 0,
+        "suppressed": 0,
+        "testsExecuted": 25,
+        "testKills": 12
+      }
+    }
+  },
+  "mutants": [
+    {
+      "file": "impl/src/main/java/com/example/calculator/Calculator.java",
+      "line": 77,
+      "operator": "RemoveConditional_EQUAL_ELSE",
+      "status": "SURVIVED"
+    },
+    {
+      "file": "impl/src/main/java/com/example/calculator/Calculator.java",
+      "line": 77,
+      "operator": "RemoveConditional_EQUAL_IF",
+      "status": "SURVIVED"
+    }
+  ]
+}
