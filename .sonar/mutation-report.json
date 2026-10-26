@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "run": {
-    "runId": "run-1792746263",
+    "runId": "run-1793011897",
     "threshold": 80,
     "round": 1,
     "verdict": "PASS",
@@ -9,96 +9,114 @@
       "pitest"
     ],
     "agentVersion": "unknown",
-    "commit": "841e7063354019d45971cbeda562c762d8387fd0",
-    "scoreBefore": 85.7,
-    "durationSec": 34
+    "commit": "8ce49d38da29bce5c31695858f02aa2bcc5d19a6",
+    "scoreBefore": 93.2,
+    "durationSec": 63
   },
   "summary": {
     "overall": {
-      "total": 14,
-      "killed": 12,
-      "timedOut": 0,
+      "total": 88,
+      "killed": 82,
+      "timedOut": 1,
       "memoryError": 0,
-      "survived": 2,
+      "survived": 5,
       "noCoverage": 0,
       "unknown": 0,
       "suppressed": 0,
-      "testsExecuted": 25,
-      "testKills": 12
+      "testsExecuted": 123,
+      "testKills": 82
     },
     "new": {
-      "total": 14,
-      "killed": 12,
-      "timedOut": 0,
+      "total": 88,
+      "killed": 82,
+      "timedOut": 1,
       "memoryError": 0,
-      "survived": 2,
+      "survived": 5,
       "noCoverage": 0,
       "unknown": 0,
       "suppressed": 0,
-      "testsExecuted": 25,
-      "testKills": 12
+      "testsExecuted": 123,
+      "testKills": 82
     }
   },
   "languages": {
     "java": {
       "overall": {
-        "total": 14,
-        "killed": 12,
-        "timedOut": 0,
+        "total": 88,
+        "killed": 82,
+        "timedOut": 1,
         "memoryError": 0,
-        "survived": 2,
+        "survived": 5,
         "noCoverage": 0,
         "unknown": 0,
         "suppressed": 0,
-        "testsExecuted": 25,
-        "testKills": 12
+        "testsExecuted": 123,
+        "testKills": 82
       },
       "new": {
-        "total": 14,
-        "killed": 12,
-        "timedOut": 0,
+        "total": 88,
+        "killed": 82,
+        "timedOut": 1,
         "memoryError": 0,
-        "survived": 2,
+        "survived": 5,
         "noCoverage": 0,
         "unknown": 0,
         "suppressed": 0,
-        "testsExecuted": 25,
-        "testKills": 12
+        "testsExecuted": 123,
+        "testKills": 82
       }
     }
   },
   "files": {
     "impl/src/main/java/com/example/calculator/Calculator.java": {
       "language": "java",
-      "changedLines": 7,
-      "lines": 46,
+      "changedLines": 4,
+      "lines": 48,
       "overall": {
-        "total": 14,
-        "killed": 12,
-        "timedOut": 0,
+        "total": 88,
+        "killed": 82,
+        "timedOut": 1,
         "memoryError": 0,
-        "survived": 2,
+        "survived": 5,
         "noCoverage": 0,
         "unknown": 0,
         "suppressed": 0,
-        "testsExecuted": 25,
-        "testKills": 12
+        "testsExecuted": 123,
+        "testKills": 82
       },
       "new": {
-        "total": 14,
-        "killed": 12,
-        "timedOut": 0,
+        "total": 88,
+        "killed": 82,
+        "timedOut": 1,
         "memoryError": 0,
-        "survived": 2,
+        "survived": 5,
         "noCoverage": 0,
         "unknown": 0,
         "suppressed": 0,
-        "testsExecuted": 25,
-        "testKills": 12
+        "testsExecuted": 123,
+        "testKills": 82
       }
     }
   },
   "mutants": [
+    {
+      "file": "impl/src/main/java/com/example/calculator/Calculator.java",
+      "line": 43,
+      "operator": "ConditionalsBoundary",
+      "status": "SURVIVED"
+    },
+    {
+      "file": "impl/src/main/java/com/example/calculator/Calculator.java",
+      "line": 47,
+      "operator": "ConditionalsBoundary",
+      "status": "SURVIVED"
+    },
+    {
+      "file": "impl/src/main/java/com/example/calculator/Calculator.java",
+      "line": 51,
+      "operator": "ConditionalsBoundary",
+      "status": "SURVIVED"
+    },
     {
       "file": "impl/src/main/java/com/example/calculator/Calculator.java",
       "line": 77,

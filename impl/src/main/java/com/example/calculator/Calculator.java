@@ -79,4 +79,8 @@ public class Calculator {
         }
         return absolute(a / gcd(a, b) * b);
     }
+
+    public boolean isEven(int a) {
+        return a % 2 == 0;
+    }
 }
