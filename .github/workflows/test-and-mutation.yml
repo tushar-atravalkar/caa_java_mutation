@@ -25,15 +25,6 @@ jobs:
       - name: Run tests
         run: mvn -B test
 
-      - name: Run mutation testing and build Sonar report
-        id: mutation
-        continue-on-error: true
-        run: |
-          python3 .claude/skills/run-mutation-workflow/scripts/run.py \
-            --skip-sonar --skip-engine-check \
-            --base origin/${{ github.base_ref || 'main' }} \
-            --threshold 80
-
       - name: Download SonarQube Scanner
         run: |
           mkdir -p ~/.sonar
@@ -41,19 +32,27 @@ jobs:
           curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-6.1.0.4477-linux-x64.zip
           unzip -q sonar-scanner.zip
           rm sonar-scanner.zip
+          echo "$HOME/.sonar/sonar-scanner-6.1.0.4477-linux-x64/bin" >> "$GITHUB_PATH"
 
-      - name: SonarQube Scan
-        if: always()
-        run: |
-          ~/.sonar/sonar-scanner-6.1.0.4477-linux-x64/bin/sonar-scanner \
-            -Dsonar.projectBaseDir=. \
-            -Dsonar.host.url=https://sonartest.nice.com \
-            -Dsonar.token=${{ secrets.SONAR_TOKEN }}
+      # Mutates the code this PR changed, writes .sonar/mutation-report.json,
+      # then runs the Sonar scan itself (the plugin reads that report).
+      - name: Mutation testing and Sonar upload
+        id: mutation
+        continue-on-error: true
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .claude/skills/run-mutation-workflow/scripts/run.py \
+            --skip-engine-check \
+            --base origin/${{ github.base_ref || 'main' }} \
+            --threshold 80 \
+            --sonar-pr "${{ github.event.pull_request.number }}" \
+            --sonar-pr-branch "${{ github.head_ref }}" \
+            --sonar-pr-base "${{ github.base_ref }}"
 
       - name: Enforce mutation gate
         if: steps.mutation.outcome == 'failure'
         run: |
-          echo "Mutation score is below the threshold (see the mutation step above)."
+          echo "Mutation step failed: score below the threshold or the Sonar upload failed (see the step above)."
           exit 1
