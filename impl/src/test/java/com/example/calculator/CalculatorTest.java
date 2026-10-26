@@ -4,7 +4,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CalculatorTest {
 
@@ -166,5 +168,30 @@ class CalculatorTest {
     @Test
     void squareRoot_positiveInput_returnsCorrectSquareRootValue() {
         assertEquals(4.0, calculator.squareRoot(16), 1e-9);
+    }
+
+    @Test
+    void isEven_evenInput_returnsTrue() {
+        assertTrue(calculator.isEven(4));
+    }
+
+    @Test
+    void isEven_zeroInput_returnsTrue() {
+        assertTrue(calculator.isEven(0));
+    }
+
+    @Test
+    void isEven_oddInput_returnsFalse() {
+        assertFalse(calculator.isEven(3));
+    }
+
+    @Test
+    void isEven_negativeOddInput_returnsFalse() {
+        assertFalse(calculator.isEven(-3));
+    }
+
+    @Test
+    void isEven_negativeEvenInput_returnsTrue() {
+        assertTrue(calculator.isEven(-4));
     }
 }
