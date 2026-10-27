@@ -1,12 +1,45 @@
 ---
 name: run-mutation-workflow
 description: Mutation testing on changed files - score, gate, optional test generation. Use for "run mutation testing", "run the workflow", "run the mutation agent", "mutation score on my changes".
-argument-hint: "[--threshold N] [--file <path>] [--languages ts,python] [--base <ref>] [--module <m>] [--full-suite] [--exclude-tests <glob>] [--remediate] [--jira-id <ID>] [--skip-sonar] [--sonar-project-key <key>] [--sonar-host <url>]"
+argument-hint: "[PR / commit / branch / file in plain words] [--threshold N] [--languages ts,python] [--module <m>] [--full-suite] [--exclude-tests <glob>] [--remediate] [--jira-id <ID>] [--skip-sonar] [--sonar-project-key <key>] [--sonar-host <url>]"
 ---
 
 Orchestrate the gate runner and the test writer as separate agent dispatches; each starts fresh. The user's arguments follow this text as `ARGUMENTS: ...`.
 
 `<py>` is `py` on Windows, `python3` elsewhere. Scripts live in `${CLAUDE_SKILL_DIR}/scripts`, which resolves to the skill's own directory wherever it is installed.
+
+## 0. Scope (fresh runs only, before anything else)
+
+The user names the scope in plain words ("mutation test PR 482", "commit 3fa9c1e", "my untracked files"). Never ask them to type `--pr` or `--commit`; you derive those. Run `<py> "${CLAUDE_SKILL_DIR}/scripts/scope_resolver.py" extract --prompt "<the user's words, verbatim>"` and read its JSON (`kind`, `flags`, `resolved`, `needsInput`, `message`, `ignored`). When several are named the order is: file, PR, commit, branch, untracked files, last commit, local changes.
+
+| `kind` | Meaning | Flags |
+|---|---|---|
+| `file` | file path(s) | `--file <path>` each |
+| `pr` | PR number or link | `--pr <N>` after preflight |
+| `commit` | commit id | `--commit <sha>` after preflight |
+| `last-commit` | "the last commit" | `--commit HEAD` after preflight (`--kind last-commit --value HEAD`) |
+| `branch` | `role: base` ("against main") | `--base <ref>` |
+| `branch` | `role: target` ("branch feature/x", "this branch") | whatever preflight returns |
+| `untracked` | untracked files | `--file <path>` each, already in `flags` |
+| `local` | "uncommitted changes" | none (uncommitted + untracked, else the last commit) |
+| `none` | nothing named | see below |
+
+- **`needsInput`** (`kind: none`): print `message`, then run `<py> "${CLAUDE_SKILL_DIR}/scripts/countdown.py" 15 --scope`. If the user interrupts and names a scope, run `extract` on their answer. If the 15 seconds pass, go on with no scope flags.
+- **`resolved: false`** (a PR link, commit, branch or file that does not exist): print `message`, ask what they meant, stop.
+- **`ignored`** not empty: tell the user in one line which scope you used and which you left out.
+- **PR, commit, last commit, branch-as-target**: run `<py> "${CLAUDE_SKILL_DIR}/scripts/scope_resolver.py" preflight --kind <kind> --value <value>` before any dispatch. It checks the checkout against the thing named:
+  1. `ok` - this is the code. Use the `flags` it returns and go on.
+  2. `wrong-branch` - the local branch is not the expected one. Exit code 7.
+  3. `changes-differ` - right branch, but the local changes are not the PR's or commit's (behind, ahead, or edited). Exit code 7.
+  4. `unresolvable` - no such PR, commit or branch. Print `problems`, stop.
+
+  On 2 or 3, show the user `message` (the problem and every option), say which option is `recommended` and the reason in it, and let the user choose. Choosing is theirs: run no option and no dispatch until they answer. Then:
+  - `worktree`: run `<py> "${CLAUDE_SKILL_DIR}/scripts/scope_resolver.py" worktree --kind <kind> --value <value>`. It creates a detached worktree beside the repo and prints `runDir`. Use that option's `flags`, and set `MUTATION_PROJECT_ROOT=<runDir>` on every script command of the run (both rounds). Tell the writer `Project root: <runDir>` as well. New tests land in that worktree, uncommitted; tell the user the path and `git worktree remove <path>` for afterwards.
+  - `checkout` or `sync`: run that option's `commands`, then preflight again; it must say `ok`.
+  - `local-as-is`: use that option's `flags` (a `--base`). Tell the user the score describes their local code, not exactly the PR or commit.
+  - `abort`: stop.
+
+The wizard also checks `--pr` and `--commit` itself and stops with `SCOPE_MISMATCH` (exit 7) and the same options, so a run never mutates code that is not the PR or commit asked for.
 
 ## 1. Jira ID (fresh runs only)
 
@@ -17,10 +50,11 @@ Before the first dispatch, have a Jira ID, a user decline, or ask once: "Jira st
 | User says | Flag |
 |---|---|
 | threshold N | `--threshold N` (default 80) |
+| a file, PR, commit, branch, untracked files or the last commit | the flags from step 0 (never typed by the user) |
 | specific file(s), any language | `--file <path>` each |
 | only some languages | `--languages typescript,python` |
 | Java build module (Maven module, or Gradle project such as `:core`) | `--module <m>` |
-| PR number, PR/branch link, base branch | `--base <ref>` |
+| a base branch to diff against | `--base <ref>` |
 | whole suite, or a survivor that should already be covered | `--full-suite` |
 | leave test classes out of PIT (slow, need a database) | `--exclude-tests <glob>` (Java/Kotlin; tests that need Docker are already left out when Docker is not running) |
 | Sonar project key or server, repo has no `sonar-project.properties` | `--sonar-project-key <key>` `--sonar-host <url>` |
@@ -29,7 +63,7 @@ Before the first dispatch, have a Jira ID, a user decline, or ask once: "Jira st
 | Sonar server without pull request analysis | `--sonar-no-pr` |
 | Pull request number when the GitHub CLI (`gh`) is not available | `--sonar-pr <number>` with `--sonar-pr-branch <branch>` and `--sonar-pr-base <branch>` (default base `main`) |
 
-Always pass `--remediate` unless the user asked for report-only: the 15-second pause in step 3 is the user's chance to cancel the LLM round. Scope defaults to uncommitted + untracked changes, else the last commit; pass `--base` only when the user named a PR, link or branch.
+Always pass `--remediate` unless the user asked for report-only: the 15-second pause in step 3 is the user's chance to cancel the LLM round. Scope defaults to uncommitted + untracked changes, else the last commit, and only after the 15-second window in step 0 passed with nothing named; pass `--base` only for a base branch the user named.
 
 ## 3. Rounds
 

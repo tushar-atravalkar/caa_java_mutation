@@ -142,6 +142,10 @@ def _hint_files(start: Path, toplevel: Path) -> list:
                         pass
                     break
         return out
+    commit = (_argv_values("--commit") or [None])[-1]
+    if commit:
+        return _git_lines(toplevel, "diff", "--name-only", "--diff-filter=d", f"{commit}^", commit) \
+            or _git_lines(toplevel, "show", "--name-only", "--format=", "--diff-filter=d", commit)
     base = (_argv_values("--base") or [None])[-1]
     names = []
     if base:
@@ -267,6 +271,27 @@ def scan(project_root: str, base: str = None) -> dict:
     }
 
 
+def scan_range(project_root: str, from_ref: str, to_ref: str, scope: str, detail: str) -> dict:
+    """Same result shape as `scan()` for the exact change set `from_ref..to_ref`.
+
+    Used for a PR (merge-base..PR head) or a single commit (parent..commit). Local work is
+    deliberately NOT mixed in: the caller (scope_resolver) has already verified the working
+    tree holds `to_ref`'s version of these files, so the line numbers in the diff are the
+    line numbers on disk."""
+    raw = _diff_files(project_root, from_ref, to_ref)
+    files, skipped = _filter_source_files(raw, project_root)
+    return {
+        "files": files,
+        "byLanguage": group_by_language(files),
+        "skipped": skipped,
+        "scope": scope,
+        "detail": detail,
+        "baseRef": from_ref,
+        "fileCount": len(files),
+        "lineRanges": diff_line_ranges(project_root, files, from_ref, to_ref),
+    }
+
+
 def resolve_line_ranges_for_files(project_root: str, files: list, base: str = None) -> dict:
     """Line ranges for a caller-supplied file list (e.g. `--file`) that never
     called `scan()` itself. Uses the same ref-resolution rules as `scan()` so
@@ -311,18 +336,19 @@ def _hunk_added_lines(diff_output: str) -> set:
     return lines
 
 
-def diff_line_ranges(project_root: str, files: list, ref: str) -> dict:
-    """{file: set(int) | None} against `ref`. None ("whole file") covers an
-    untracked/new file (nothing to diff against -- everything in it is new)
-    and the fail-open case where no diff could be parsed, so a file is never
+def diff_line_ranges(project_root: str, files: list, ref: str, to_ref: str = None) -> dict:
+    """{file: set(int) | None} against `ref` (the working tree, or `to_ref` when given). None
+    ("whole file") covers an untracked/new file (nothing to diff against -- everything in it
+    is new) and the fail-open case where no diff could be parsed, so a file is never
     silently excluded from scoring entirely because its ranges are unknown."""
     ranges = {}
+    refs = [ref, to_ref] if to_ref else [ref]
     for f in files:
         is_tracked = _git(project_root, "ls-files", "--error-unmatch", "--", f).returncode == 0
         if not is_tracked:
             ranges[f] = None
             continue
-        result = _git(project_root, "diff", "-U0", "--diff-filter=d", ref, "--", f)
+        result = _git(project_root, "diff", "-U0", "--diff-filter=d", *refs, "--", f)
         if result.returncode != 0 or not result.stdout.strip():
             ranges[f] = None
             continue
@@ -384,14 +410,15 @@ def _merge_base(project_root: str, base_branch: str) -> str:
     return result.stdout.strip()
 
 
-def _diff_files(project_root: str, base: str) -> list:
-    """Changed paths vs `base`, excluding deletions.
+def _diff_files(project_root: str, base: str, to: str = None) -> list:
+    """Changed paths vs `base` (the working tree, or `to` when given), excluding deletions.
 
     `--diff-filter=d` drops deleted paths at the source. Returning a path that
     no longer exists crashes Step 3, and there is nothing to mutate in a file
     that is gone."""
     # --relative: paths relative to project_root, which may be below the git toplevel.
-    result = _git(project_root, "diff", "--name-only", "--relative", "--diff-filter=d", base)
+    result = _git(project_root, "diff", "--name-only", "--relative", "--diff-filter=d", base,
+                  *([to] if to else []))
     if result.returncode != 0:
         raise RuntimeError(f"git diff failed: {result.stderr.strip()}")
     return [f.strip() for f in result.stdout.splitlines() if f.strip()]

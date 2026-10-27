@@ -21,6 +21,8 @@ Usage:
     python run.py --file src/a.ts --file b/c.py   # explicit, repeatable, mixed languages
     python run.py --module impl            # Maven module (Java only)
     python run.py --base origin/develop    # diff against a different base branch
+    python run.py --pr 482                 # exactly PR 482's changes (checkout must be that PR)
+    python run.py --commit 3fa9c1e         # exactly one commit's changes (same checkout rule)
     python run.py --remediate              # on gate failure, write prompt.txt for the agent
     python run.py --verify --run-id run-1  # re-run engines after adding tests
     python run.py --languages ts,python    # restrict a polyglot run to some languages
@@ -147,9 +149,10 @@ try:  # package-relative imports -- resolve at any install location
     from .language_detector import detect, detect_for_files, missing_engines
     from .lang_profiles import get_profile, profile_for_file, profile_for_root, build_module_for
     from .changed_files_scanner import (
-        scan, group_by_language, resolve_line_ranges_for_files, resolve_project_root,
+        scan, scan_range, group_by_language, resolve_line_ranges_for_files, resolve_project_root,
         changes_outside_root,
     )
+    from . import scope_resolver
     from .arid_filter import filter_file, is_suppressed
     from .pit_parser import (
         parse_survivors, summarize, summarize_by, partition_suppressed, mutation_key,
@@ -164,9 +167,10 @@ except ImportError:  # direct invocation: py .../run.py
     from language_detector import detect, detect_for_files, missing_engines
     from lang_profiles import get_profile, profile_for_file, profile_for_root, build_module_for
     from changed_files_scanner import (
-        scan, group_by_language, resolve_line_ranges_for_files, resolve_project_root,
+        scan, scan_range, group_by_language, resolve_line_ranges_for_files, resolve_project_root,
         changes_outside_root,
     )
+    import scope_resolver
     from arid_filter import filter_file, is_suppressed
     from pit_parser import (
         parse_survivors, summarize, summarize_by, partition_suppressed, mutation_key,
@@ -502,6 +506,41 @@ def _run_engines(targets, prof_by_file, args, reports_root, label="Step 4",
     return mutations, tools_run, None
 
 
+def _scope_productive_to_diff(productive, diff_map):
+    """{file: productive lines} cut down to the lines the diff changed, so an engine only
+    generates mutants there. A file with no entry in `diff_map`, or a None ("whole file")
+    entry, keeps every productive line. Round 1 and the verify run both go through this, so
+    round 2 is scored over the same mutants as round 1."""
+    if not diff_map:
+        return productive
+    scoped = {}
+    for source_file, prod_lines in productive.items():
+        ranges = None
+        for key in (source_file, Path(source_file).name):
+            if key in diff_map:
+                ranges = diff_map[key]
+                break
+        scoped[source_file] = prod_lines if ranges is None else [l for l in prod_lines if l in ranges]
+    return scoped
+
+
+def _diff_ranges_for(m, diff_map, by_name):
+    """(matched, ranges) for one mutant. `diff_map` is keyed by repo-relative path but PIT, mutmut
+    and gremlins report a bare file name, so fall back to the name when it is unambiguous and
+    otherwise to the mutant's class path. Unmatched stays fail-open (the mutant is kept)."""
+    for key in _file_keys(m):
+        if key in diff_map:
+            return True, diff_map[key]
+    for key in _file_keys(m):
+        names = by_name.get(Path(key).name, [])
+        if len(names) > 1 and m.get("class"):
+            stem = m["class"].replace(".", "/")
+            names = [n for n in names if Path(n).with_suffix("").as_posix().endswith(stem)]
+        if len(names) == 1:
+            return True, diff_map[names[0]]
+    return False, None
+
+
 def _filter_to_diff_scope(mutations, diff_map):
     """Keep only mutants on a line the diff actually changed.
 
@@ -520,16 +559,11 @@ def _filter_to_diff_scope(mutations, diff_map):
     if not diff_map:
         return mutations, []
     kept, dropped = [], []
+    by_name = {}
+    for key in diff_map:
+        by_name.setdefault(Path(key).name, []).append(key)
     for m in mutations:
-        ranges, matched = None, False
-        for key in _file_keys(m):
-            if key in diff_map:
-                matched = True
-                r = diff_map[key]
-                if r is None:
-                    ranges = None
-                    break
-                ranges = (ranges or set()) | r
+        matched, ranges = _diff_ranges_for(m, diff_map, by_name)
         if not matched or ranges is None:
             kept.append(m)
             continue
@@ -593,6 +627,21 @@ def main(args, run_id: str, start: float) -> None:
         scope_label, scope_detail = "explicit", f"{len(target_files)} file(s) via --file"
         skipped_by_scanner = []
         diff_map = resolve_line_ranges_for_files(PROJECT_ROOT, target_files, base=args.base)
+    elif args.pr or args.commit:
+        kind, value = ("pr", args.pr) if args.pr else ("commit", args.commit)
+        # Safety net: the wizard already ran this check, but run.py can be invoked directly. Never
+        # mutate a checkout that is not the PR/commit, whatever the caller thinks it is on.
+        pre = scope_resolver.preflight(PROJECT_ROOT, kind, value)
+        if pre["status"] != "ok":
+            _exit_error(artifacts_dir, telemetry, run_id,
+                        "SCOPE_MISMATCH: " + scope_resolver.describe(pre),
+                        {"scopePreflight": pre})
+            return
+        scanned = scan_range(PROJECT_ROOT, pre["fromRef"], pre["headSha"], pre["scope"], pre["detail"])
+        target_files = scanned["files"]
+        scope_label, scope_detail = scanned["scope"], scanned["detail"]
+        skipped_by_scanner = scanned["skipped"]
+        diff_map = scanned.get("lineRanges") or {}
     else:
         try:
             scanned = scan(PROJECT_ROOT, base=args.base)
@@ -718,19 +767,7 @@ def main(args, run_id: str, start: float) -> None:
     # 5-minute run into a 90-minute one. When diff_map is absent (new/untracked
     # file with no base to diff against) we fall back to the full productive set.
     productive_full = productive  # unscoped, for the Sonar report's density
-    if diff_map:
-        diff_scoped = {}
-        for source_file, prod_lines in productive.items():
-            matched_ranges = None
-            for key in (source_file, Path(source_file).name):
-                if key in diff_map:
-                    matched_ranges = diff_map[key]
-                    break
-            if matched_ranges is not None:
-                diff_scoped[source_file] = [l for l in prod_lines if l in matched_ranges]
-            else:
-                diff_scoped[source_file] = prod_lines
-        productive = diff_scoped
+    productive = _scope_productive_to_diff(productive, diff_map)
 
     # --- Step 4 -- one engine per language, merged into one score -----------
     # Resolved before the engines run, not after: an engine that can narrow its
@@ -1040,9 +1077,12 @@ def verify(args, run_id: str, start: float) -> None:
         if tf and os.path.exists(tf):
             verify_test_files[source_file] = os.path.relpath(tf, PROJECT_ROOT)
 
+    # Engines mutate only the changed lines, exactly as in round 1; `productive` itself stays
+    # unscoped for the Sonar report below.
     mutations, tools_run, err = _run_engines(
         targets, prof_by_file, args, artifacts_dir / "pit-verify",
-        label="Step 4b", productive=productive, test_files=verify_test_files,
+        label="Step 4b", productive=_scope_productive_to_diff(productive, diff_map),
+        test_files=verify_test_files,
     )
     if err:
         _exit_error(artifacts_dir, telemetry, run_id, err,
@@ -1316,6 +1356,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--base", default=None,
                         help="Base branch/ref. Omit to scope to local uncommitted "
                              "changes, falling back to the last commit.")
+    parser.add_argument("--pr", default=None,
+                        help="PR number: mutate exactly that PR's changes (merge-base..PR head). "
+                             "The checkout must be the PR's code or the run stops with "
+                             "SCOPE_MISMATCH. Set by the agent from the user's prompt, not typed.")
+    parser.add_argument("--commit", default=None,
+                        help="Commit id (or HEAD): mutate exactly that commit's changes (parent..commit). "
+                             "Same checkout rule as --pr.")
     parser.add_argument("--jira-id", default=None,
                         help="Optional Jira issue key (e.g. PROJ-1234). Validated "
                              "before this run proceeds; the adoption label from "

@@ -25,6 +25,7 @@ import argparse
 import glob
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -273,6 +274,11 @@ def check_config(project_root: Path) -> int:
     return 0
 
 
+def _retry_delay(attempt: int, base: float = 2.0, cap: float = 30.0) -> float:
+    """Exponential backoff with full jitter for retry number `attempt` (0-based)."""
+    return random.uniform(0, min(cap, base * (2 ** attempt)))
+
+
 def _wait_for_task(project_root: Path, props: dict, host: str, token: str, timeout_s: int):
     work = Path(project_root) / props.get("sonar.working.directory", ".scannerwork")
     task_file = work / "report-task.txt"
@@ -283,6 +289,7 @@ def _wait_for_task(project_root: Path, props: dict, host: str, token: str, timeo
     if not ce_url:
         return None, _fail("no-task", "report-task.txt has no ceTaskUrl")
     deadline = time.time() + timeout_s
+    failures = 0
     while time.time() < deadline:
         try:
             task = _http_json(ce_url, token)["task"]
@@ -293,8 +300,10 @@ def _wait_for_task(project_root: Path, props: dict, host: str, token: str, timeo
                          and not (isinstance(exc, urllib.error.HTTPError) and exc.code < 500))
             if not transient:
                 return None, _fail("analysis", f"cannot read the analysis task: {exc}")
-            time.sleep(2)
+            time.sleep(_retry_delay(failures))
+            failures += 1
             continue
+        failures = 0
         status = task.get("status")
         if status == "SUCCESS":
             return {"analysisId": task.get("analysisId"),

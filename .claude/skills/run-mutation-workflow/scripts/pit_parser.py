@@ -72,6 +72,7 @@ def run_pit(
     timeout: int = DEFAULT_TIMEOUT_SEC,
     quiet: bool = True,
     log_path: str = None,
+    excluded_methods: list = None,
     excluded_tests: list = None,
 ) -> int:
     """
@@ -106,6 +107,9 @@ def run_pit(
         cmd.append("-DtargetClasses=" + ",".join(target_classes))
     if excluded_tests:
         cmd.append("-DexcludedTestClasses=" + ",".join(excluded_tests))
+    if excluded_methods:
+        # diff narrowing: skip methods the diff never touched (diff_narrowing.py)
+        cmd.append("-DexcludedMethods=" + ",".join(excluded_methods))
     if reports_dir:
         cmd.append("-Dpit.reportsDirectory=" + str(reports_dir))
 

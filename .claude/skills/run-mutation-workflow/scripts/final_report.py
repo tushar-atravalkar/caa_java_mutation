@@ -177,6 +177,9 @@ def render(run_id: str, tests_added=None, test_files=None, tokens: bool = False)
     out = [f"verdict: {verdict}   run: {run_id}"]
     if gate.get("reason"):
         out.append(f"reason: {gate['reason']}")
+    if gate.get("scopeMessage"):  # --pr/--commit named code this checkout does not hold: options, user decides
+        out.append(gate["scopeMessage"])
+        out.append("Ask the user which option they want; never choose for them. Nothing was mutated.")
     if gate.get("error"):
         # Engine failures carry whole tracebacks; the tail names the cause and
         # the full transcript is in mutation-wizard.log.

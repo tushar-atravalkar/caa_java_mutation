@@ -22,6 +22,8 @@ Exit codes (stable contract for CI scripts):
     4   ALREADY_RUNNING  a run is already in progress in this project
     5   ALREADY_VERIFIED   --verify refused: that run already used its round 2
     6   SONAR_UPLOAD_FAILED  the final Sonar upload failed; the mutation verdict is unchanged
+    7   SCOPE_MISMATCH  --pr/--commit named code this checkout does not hold (wrong branch,
+                       or the local changes differ); MUTATION_RESULT carries the options
     130 USER_DECLINED  user declined at the interactive scope-confirmation prompt
     255 INTERNAL       unhandled exception in this wrapper (bug, not a gate result)
 
@@ -57,6 +59,7 @@ try:  # package-relative imports -- resolve at any install location
     from . import changed_files_scanner
     from . import java_tests
     from . import lang_profiles
+    from . import scope_resolver
 except ImportError:  # direct invocation: py .../mutation_wizard.py
     sys.path.insert(0, str(_HERE))
     import observability  # noqa: E402
@@ -64,6 +67,7 @@ except ImportError:  # direct invocation: py .../mutation_wizard.py
     import changed_files_scanner  # noqa: E402
     import java_tests  # noqa: E402
     import lang_profiles  # noqa: E402
+    import scope_resolver  # noqa: E402
 
 # Root of the repo under test -- resolved from the invocation context (env var,
 # git toplevel, cwd), never from where this script happens to be installed.
@@ -641,7 +645,29 @@ def _has_explicit_scope(passthrough: list) -> bool:
     is False, there is no PR/link context at all -- resolve_scope() below
     decides what to mutate (local changes, else the last commit) instead of
     leaving the choice to run.py."""
-    return "--base" in passthrough or "--file" in passthrough
+    return any(f in passthrough for f in ("--base", "--file", "--pr", "--commit"))
+
+
+def _flag_value(passthrough: list, flag: str):
+    for i, tok in enumerate(passthrough):
+        if tok == flag and i + 1 < len(passthrough):
+            return passthrough[i + 1]
+        if tok.startswith(flag + "="):
+            return tok.split("=", 1)[1]
+    return None
+
+
+def check_pr_commit_scope(passthrough: list):
+    """Preflight for --pr / --commit: (None, []) when there is none or the checkout is the PR/commit's
+    code, else (the preflight result, []). Second element: files in scope, for the timeout estimate."""
+    for flag, kind in (("--pr", "pr"), ("--commit", "commit")):
+        value = _flag_value(passthrough, flag)
+        if value:
+            pre = scope_resolver.preflight(PROJECT_ROOT, kind, value)
+            if pre["status"] != "ok":
+                return pre, []
+            return None, pre["files"]
+    return None, []
 
 
 def resolve_scope(interactive: bool):
@@ -783,6 +809,28 @@ def main() -> int:
         enduser_id=_git_value("config", "user.email"),
     )
 
+    scope_files = []
+    if not verify_round:
+        mismatch, scope_files = check_pr_commit_scope(passthrough)
+        if mismatch:
+            text = scope_resolver.describe(mismatch)
+            warn("Stopped before running -- " + text.splitlines()[0])
+            for line in text.splitlines()[1:]:
+                note(line.strip())
+            _write_stub_gate(run_id, "SCOPE_MISMATCH", text.splitlines()[0])
+            _gate_path = Path(PROJECT_ROOT) / "mutation-reports" / run_id / "gate.json"
+            _gate = _read_json(_gate_path)
+            _gate.update(scopeMessage=text, scopePreflight=mismatch)
+            _gate_path.write_text(json.dumps(_gate, indent=2), encoding="utf-8")
+            observability.try_end_run(_ACTIVE_SPAN, status="ok", pass_fail_status="not_applicable",
+                                       kpi={"scope": mismatch["kind"], "scopeMismatch": mismatch["status"]})
+            _emit_result({"runId": None, "verdict": "SCOPE_MISMATCH", "exitCode": 7,
+                          "status": mismatch["status"], "problems": mismatch["problems"],
+                          "recommended": mismatch["recommended"], "options": mismatch["options"],
+                          "reason": "the checkout is not the code that was asked for -- show the options "
+                                    "to the user and let them choose; do not pick one yourself"})
+            return 7
+
     if not verify_round and (args.last_commit or not had_explicit_scope):
         files, scope = resolve_scope(args.interactive)
         if files is None:
@@ -820,7 +868,7 @@ def main() -> int:
         # Count only the tests this run executes: the ones for the files in scope (--file, or
         # what --base selects). When that cannot be told, count every test of the languages in
         # scope, which can only over-estimate.
-        _scope = _scope_files(passthrough)
+        _scope = _scope_files(passthrough) + list(scope_files)  # + the --pr/--commit diff's files
         _test_count, _test_files_found = (
             (0, []) if "--full-suite" in passthrough else _count_tests_in_scope(_scope, passthrough))
         if not _test_count:

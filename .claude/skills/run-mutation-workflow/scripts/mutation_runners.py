@@ -56,6 +56,11 @@ except ImportError:  # direct invocation: py .../mutation_runners.py
     import lang_profiles  # noqa: E402
     import java_tests  # noqa: E402
 
+try:
+    from . import diff_narrowing
+except ImportError:
+    import diff_narrowing  # noqa: E402
+
 # How many discontiguous line ranges are worth passing to an engine before it is
 # cheaper to just hand over the whole file. A heavily interleaved file produces
 # dozens of tiny ranges and an unwieldy command line for no real saving.
@@ -291,11 +296,15 @@ def _run_pitest(profile, project_root, module, targets, reports_dir,
             test_globs=selection["tests"], excluded_tests=selection["excluded"],
         )
     else:
+        # pitest has no line filter: skip whole methods the diff never touched.
+        # An unscoped file (no productive lines) keeps all its methods.
+        excluded = diff_narrowing.java_excluded_methods(
+            {str(Path(project_root, src)): productive_lines.get(src) for src, _ in targets})
         rc = pit_parser.run_pit(
             project_root, module=module or None,
             target_classes=[t for _, t in targets],
             reports_dir=str(reports_dir), timeout=timeout,
-            quiet=quiet, log_path=log_path, excluded_tests=exclude,
+            quiet=quiet, log_path=log_path, excluded_methods=excluded, excluded_tests=exclude,
         )
     if rc != 0:
         return rc, None, f"PIT run failed (exit {rc}). See {log_path}."
@@ -1014,15 +1023,41 @@ def _run_mutmut(profile, project_root, module, targets, reports_dir,
     # mutmut's exit code is a bitmask (survivors set bits) -- a nonzero code is
     # the normal 'some mutants survived' outcome, not a tool failure.
     if major >= 3:
-        # v3 has no file scoping: positional args are mutant-name globs (one set per target file).
-        # _mutmut_results_v3 still filters the results back down to `targets`.
-        patterns = [pat for _, tid in targets for pat in _mutmut_v3_patterns(tid)]
+        # v3 has no file or line scoping, only positional mutant-name globs. Narrow to the
+        # functions the diff touches; _mutmut_results_v3 still filters results back to `targets`.
+        in_targets = {s for s, _ in targets}
+        names = []
+        if in_targets and all(productive_lines.get(s) for s in in_targets):
+            names = diff_narrowing.mutmut_v3_name_filters(
+                {os.path.join(project_root, s): productive_lines[s] for s in in_targets})
+        # no function-level narrowing possible -> fall back to whole-file globs
+        patterns = names or [pat for _, tid in targets for pat in _mutmut_v3_patterns(tid)]
         rc, out = _run(engine + ["run", *patterns],
                        project_root, timeout, quiet, log_path, tolerate_nonzero=True)
+        if "Filtered for specific mutants, but nothing matches" in (out or ""):
+            # fail open: a glob that matched nothing must never lose results
+            rc, out = _run(engine + ["run"],
+                           project_root, timeout, quiet, log_path, tolerate_nonzero=True)
         return _mutmut_results_v3(engine, project_root, targets, out)
 
-    rc, out = _run(engine + ["run", "--paths-to-mutate", paths],
-                   project_root, timeout, quiet, log_path, tolerate_nonzero=True)
+    # v2 only: a pre_mutation hook skips every mutation outside the diff's
+    # lines. Never overwrites a mutmut_config.py the project already has.
+    cfg = Path(project_root, "mutmut_config.py")
+    target_srcs = {src for src, _ in targets}
+    scoped = {Path(src).as_posix(): lines for src, lines in productive_lines.items()
+              if lines and src in target_srcs}
+    wrote_cfg = bool(scoped) and not cfg.exists()
+    if wrote_cfg:
+        cfg.write_text(diff_narrowing.mutmut_v2_config(
+            {os.path.relpath(k, project_root).replace(os.sep, "/")
+             if os.path.isabs(k) else k: v for k, v in scoped.items()}),
+            encoding="utf-8")
+    try:
+        rc, out = _run(engine + ["run", "--paths-to-mutate", paths],
+                       project_root, timeout, quiet, log_path, tolerate_nonzero=True)
+    finally:
+        if wrote_cfg:
+            cfg.unlink(missing_ok=True)
 
     junit_path = reports_dir / "mutmut-junit.xml"
     try:
@@ -1210,6 +1245,12 @@ def _parse_mutmut_junit(path, targets):
             elif rel == default_rel and rel2 != default_rel:
                 src, rel = src2, rel2
         if not line:
+            # mutmut v2's junit also carries the line as a plain `line` attribute.
+            try:
+                line = int(case.attrib.get("line") or 0)
+            except ValueError:
+                line = 0
+        if not line:
             # mutmut puts the diff in the failure text; the `--- path:line` header
             # in that diff is the only place the real line number appears.
             blob = (failure.text if failure is not None else "") or ""
@@ -1256,13 +1297,18 @@ def _run_gremlins(profile, project_root, module, targets, reports_dir,
 
     reports_dir = Path(reports_dir)
     reports_dir.mkdir(parents=True, exist_ok=True)
-    pkgs = sorted({tid for _, tid in targets}) or ["./..."]
+    pkgs = sorted({tid for _, tid in targets}) or ["."]
     # One run per package: the report names files relative to the package it ran on, so a
     # combined run could not tell two `util.go` apart.
     mutations = []
     for i, pkg in enumerate(pkgs):
         out_json = reports_dir / ("gremlins.json" if len(pkgs) == 1 else f"gremlins-{i}.json")
-        cmd = engine + ["unleash", "--output", str(out_json), pkg]
+        cmd = engine + ["unleash", "--output", str(out_json)]
+        # gremlins has no line filter: at least skip the package's unchanged files.
+        for rx in diff_narrowing.go_excluded_files(
+                project_root, [pkg], [str(Path(project_root, src)) for src, _ in targets]):
+            cmd += ["--exclude-files", rx]
+        cmd.append(pkg)
         rc, out = _run(cmd, project_root, timeout, quiet, log_path, tolerate_nonzero=True)
         if not out_json.exists():
             return 1, None, (

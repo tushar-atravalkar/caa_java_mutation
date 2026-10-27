@@ -563,7 +563,7 @@ def _go_target(project_root: str, source_file: str) -> Optional[str]:
     if _is_test_path(source_file):
         return None
     d = Path(source_file).parent.as_posix()
-    return "./" + d if d and d != "." else "./..."
+    return "./" + d if d and d != "." else "."
 
 
 def _csharp_test(project_root: str, source_file: str) -> Optional[str]:

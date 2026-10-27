@@ -485,6 +485,25 @@ def test_mutmut_parser(tmp):
        runners._mutmut_v3_patterns("src/pkg/mod.py"), ["src.pkg.mod.*", "pkg.mod.*"])
     eq("mutmut v3: package __init__ maps to the package",
        runners._mutmut_v3_patterns("app/__init__.py"), ["app.*"])
+    # v3 function-level narrowing: globs for touched functions/methods only.
+    dn = runners.diff_narrowing
+    fsrc = tmp / "v3calc.py"
+    fsrc.write_text("def a():\n    return 1\n\nclass C:\n    @staticmethod\n"
+                    "    def m(x):\n        return x+1\n    def n(self):\n        return 2\n"
+                    "\ndef b():\n    return 3\n", encoding="utf-8")
+    eq("mutmut v3 filter: function", dn.mutmut_v3_name_filters({str(fsrc): [2]}),
+       ["*x_a__mutmut_*"])
+    eq("mutmut v3 filter: decorated method + method",
+       dn.mutmut_v3_name_filters({str(fsrc): [5, 9]}),
+       ["*xǁCǁm__mutmut_*", "*xǁCǁn__mutmut_*"])
+    eq("mutmut v3 filter: line outside any function -> no globs",
+       dn.mutmut_v3_name_filters({str(fsrc): [3]}), [])
+    eq("mutmut v3 filter: any un-narrowable file -> run everything",
+       dn.mutmut_v3_name_filters({str(fsrc): [2], "x.py": []}), [])
+    eq("mutmut v3 filter: unreadable file -> run everything",
+       dn.mutmut_v3_name_filters({str(tmp / "missing.py"): [1]}), [])
+    check("mutmut v2 config generator unchanged",
+          "def pre_mutation" in dn.mutmut_v2_config({"a.py": [1]}))
     src = ["", "def add(a, b):", "    return a + b", "", "def sub(a, b):",
            "    if a > b:", "        return a - b", "    return 0"]
     show = ("# app.calc.x_sub__mutmut_1: no tests\n--- app/calc.py\n+++ app/calc.py\n"
@@ -2396,6 +2415,315 @@ def test_sonar_run_integration(tmp):
         fake.close()
 
 
+# --- 16. scope extraction from the prompt, PR/commit preflight, --pr/--commit runs ---
+
+def _sh(cwd, *args):
+    return subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True,
+                          text=True, encoding="utf-8").stdout.strip()
+
+
+def _scope_repo(tmp, name="scope"):
+    """origin (bare, with refs/pull/7/head) + a clone on feature/x. main has calc.py; feature/x adds
+    lines to calc.py (commit B) and a new util.py (commit C); PR 7 = feature/x's tip."""
+    origin, work = tmp / f"{name}_origin.git", tmp / f"{name}_work"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True, capture_output=True)
+    work.mkdir()
+    _git_repo(work)
+    _sh(work, "remote", "add", "origin", str(origin))
+    skills = work / ".claude" / "skills"
+    shutil.copytree(_SKILLS / "run-mutation-workflow", skills / "run-mutation-workflow",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    scripts = skills / "run-mutation-workflow" / "scripts"
+    (scripts / "mutation_runners.py").write_text(_STUB_ENGINE, encoding="utf-8")
+    _mkfile(work / ".gitignore", "mutation-reports/\n.sonar/\n__pycache__/\n")
+    _mkfile(work / "pom.xml", "<project/>")
+    _mkfile(work / "app" / "calc.py", "def add(a, b):\n    return a + b\n")
+    _mkfile(work / "app" / "test_calc.py", "def test_add():\n    assert True\n")
+    _mkfile(work / "app" / "test_util.py", "def test_twice():\n    assert True\n")
+    _git_commit(work, "A: base")
+    _sh(work, "push", "-q", "origin", "main")
+    _sh(work, "switch", "-q", "-c", "feature/x")
+    _mkfile(work / "app" / "calc.py",
+            "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    if a < b:\n        return 0\n    return a - b\n")
+    _git_commit(work, "B: sub")
+    b = _sh(work, "rev-parse", "HEAD")
+    _mkfile(work / "app" / "util.py", "def twice(x):\n    return x * 2\n")
+    _git_commit(work, "C: util")
+    c = _sh(work, "rev-parse", "HEAD")
+    _sh(work, "push", "-q", "origin", "feature/x", "feature/x:refs/pull/7/head")
+    return work, scripts, {"A": _sh(work, "rev-parse", "main"), "B": b, "C": c}
+
+
+def _scope_files(run_py, repo, env, run_id, *flags):
+    p = _run(run_py, repo, env, *flags, "--run-id", run_id, "--skip-sonar")
+    path = repo / "mutation-reports" / run_id / "results.json"
+    if not path.exists():
+        return ("no results", p.returncode, (p.stdout + p.stderr)[-800:])
+    return sorted(json.loads(path.read_text(encoding="utf-8"))["target_files"])
+
+
+def test_scope_resolution(tmp):
+    print("\n[16] scope from the prompt, PR/commit preflight, --pr/--commit runs")
+    import scope_resolver as sr
+    work, scripts, sha = _scope_repo(tmp)
+    root = str(work)
+    real_gh = sr._pr_from_gh
+    sr._pr_from_gh = lambda r, n: None        # PR lookup through the remote's refs/pull/N/head
+    try:
+        # --- extract: what the user's words mean ---
+        def ex(prompt):
+            return sr.extract(prompt, root)
+
+        def kv(prompt):
+            r = ex(prompt)
+            return r["kind"], r["flags"]
+
+        eq("no scope named", kv("run mutation testing")[0], "none")
+        check("no scope asks the user", ex("mutation score on my changes")["needsInput"] is True)
+        eq("a threshold is not a PR", kv("run mutation testing --threshold 90")[0], "none")
+        eq("PR number", kv("run mutation testing on PR 482"), ("pr", ["--pr", "482"]))
+        eq("pull request with a hash", kv("mutation test pull request #12 please"), ("pr", ["--pr", "12"]))
+        eq("PR link", kv("check https://github.com/acme/shop/pull/99/files")[1], ["--pr", "99"])
+        eq("bare #n next to the word PR", kv("the PR is #31, mutate it")[1], ["--pr", "31"])
+        eq("bare #n without PR is an issue, not a PR", kv("fix for issue #31")[0], "none")
+        eq("commit by word and real short sha", kv(f"mutation on commit {sha['B'][:9]}")[1], ["--commit", sha["B"]])
+        eq("bare sha git knows is a commit", kv(f"run it for {sha['C'][:10]}")[1], ["--commit", sha["C"]])
+        r = ex("commit 3fa9c1e0")
+        check("an unknown sha is reported, not guessed", r["kind"] == "commit" and r["resolved"] is False
+              and "not in this repository" in r["message"], str(r))
+        eq("'commit added' is prose", kv("the commit added tests, run mutation")[0], "none")
+        eq("a bare hex word git does not know is ignored", kv("deadbeef is a word")[0], "none")
+        r = ex("mutate app/calc.py and PR 7")
+        check("file beats PR", r["kind"] == "file" and r["flags"] == ["--file", "app/calc.py"]
+              and [i["kind"] for i in r["ignored"]] == ["pr"], str(r))
+        eq("PR beats commit", kv(f"PR 7 or commit {sha['B'][:9]}")[0], "pr")
+        eq("commit beats branch", kv(f"commit {sha['B'][:9]} on branch feature/x")[0], "commit")
+        eq("branch as the thing to diff against", kv("mutate my changes against main"), ("branch", ["--base", "main"]))
+        r = ex("run mutation for branch feature/x")
+        check("a named branch is a target with flags decided by preflight",
+              (r["kind"], r["value"], r["role"], r["flags"]) == ("branch", "feature/x", "target", []), str(r))
+        eq("'this branch' means the current one", ex("mutate this branch")["value"], "feature/x")
+        check("an unknown branch is reported", ex("branch no/such-one")["resolved"] is False)
+        _mkfile(work / "app" / "fresh.py", "def f():\n    return 1\n")
+        r = ex("run it on my untracked files")
+        eq("untracked source files become --file flags", (r["kind"], r["flags"]), ("untracked", ["--file", "app/fresh.py"]))
+        eq("last commit", kv("mutation testing for the last commit"), ("last-commit", ["--commit", "HEAD"]))
+        eq("uncommitted changes", kv("mutate my uncommitted changes")[0], "local")
+        eq("a file with no directory", kv("test Calculator.java")[1], ["--file", "Calculator.java"])
+        (work / "app" / "fresh.py").unlink()
+
+        # --- countdown window for 'no scope' ---
+        p = subprocess.run([sys.executable, str(_HERE / "countdown.py"), "0", "--scope"],
+                           capture_output=True, text=True, encoding="utf-8")
+        check("no-scope window tells the user what to provide and what happens by default",
+              "No file, PR, commit or branch" in p.stdout and "uncommitted + untracked" in p.stdout
+              and "interrupt" in p.stdout, p.stdout)
+        p = subprocess.run([sys.executable, str(_HERE / "countdown.py"), "0"], capture_output=True, text=True, encoding="utf-8")
+        check("round-2 countdown unchanged", "Round 2 (LLM test writing)" in p.stdout, p.stdout)
+
+        # --- preflight: ok (3. same -> run) ---
+        pre = sr.preflight(root, "pr", "7")
+        eq("on the PR's branch, same code -> ok", pre["status"], "ok")
+        eq("ok carries the run flags", pre["flags"], ["--pr", "7"])
+        eq("PR scope is the PR's own source files", pre["files"], ["app/calc.py", "app/util.py"])
+        eq("commit on this branch, files untouched since -> ok", sr.preflight(root, "commit", sha["B"])["status"], "ok")
+        eq("last-commit alias", sr.preflight(root, "last-commit", "HEAD")["flags"], ["--commit", "HEAD"])
+
+        # --- preflight: unresolvable ---
+        pre = sr.preflight(root, "pr", "999")
+        check("unknown PR is unresolvable, with a reason", pre["status"] == "unresolvable" and "999" in pre["problems"][0], str(pre))
+        eq("unknown commit is unresolvable", sr.preflight(root, "commit", "deadbeef1")["status"], "unresolvable")
+        eq("unknown branch is unresolvable", sr.preflight(root, "branch", "nope")["status"], "unresolvable")
+
+        # --- 2. right branch, changes differ ---
+        _mkfile(work / "app" / "calc.py", "def add(a, b):\n    return a - b\n")      # uncommitted edit
+        pre = sr.preflight(root, "pr", "7")
+        check("uncommitted edit of a PR file -> changes-differ", pre["status"] == "changes-differ"
+              and pre["modifiedFiles"] == ["app/calc.py"], str(pre))
+        eq("options offered", [o["id"] for o in pre["options"]], ["worktree", "local-as-is", "abort"])
+        eq("worktree is the recommendation (proves exactly the PR's code)", pre["recommended"], "worktree")
+        check("local-as-is is scoped by --base, labelled as not exactly the PR",
+              pre["options"][1]["flags"] == ["--base", pre["fromRef"]] and "not" in pre["options"][1]["why"], str(pre["options"][1]))
+        eq("the check changes nothing: flags withheld", pre["flags"], [])
+        eq("a commit whose file was edited since -> changes-differ", sr.preflight(root, "commit", sha["B"])["status"], "changes-differ")
+        eq("a commit that did not touch the edited file is still ok", sr.preflight(root, "commit", sha["C"])["status"], "ok")
+        _sh(work, "checkout", "--", "app/calc.py")
+
+        _sh(work, "reset", "-q", "--hard", sha["B"])                                 # local branch behind the PR
+        pre = sr.preflight(root, "pr", "7")
+        check("same branch name but behind -> changes-differ", pre["status"] == "changes-differ" and pre["behind"] == 1, str(pre))
+        eq("clean + only behind: fast-forward is recommended", (pre["recommended"], [o["id"] for o in pre["options"]]),
+           ("sync", ["sync", "worktree", "local-as-is", "abort"]))
+        _mkfile(work / "app" / "calc.py", "def add(a, b):\n    return a * b\n")
+        pre = sr.preflight(root, "pr", "7")
+        eq("behind AND dirty: no fast-forward offered, worktree recommended",
+           (pre["recommended"], "sync" in [o["id"] for o in pre["options"]]), ("worktree", False))
+        _sh(work, "checkout", "--", "app/calc.py")
+        _sh(work, "reset", "-q", "--hard", sha["C"])
+
+        # gh-style lookup knows the PR's branch name
+        sr._pr_from_gh = lambda r, n: {"headSha": sha["C"], "headBranch": "feature/x", "baseName": "main",
+                                       "state": "OPEN", "source": "gh"}
+        pre = sr.preflight(root, "pr", "7")
+        eq("gh lookup: expected branch matches -> ok", (pre["status"], pre["expectedBranch"], pre["baseRef"]),
+           ("ok", "feature/x", "origin/main"))
+
+        # --- 1. wrong branch ---
+        _sh(work, "switch", "-q", "main")
+        pre = sr.preflight(root, "pr", "7")
+        check("on main, PR lives on feature/x -> wrong-branch", pre["status"] == "wrong-branch"
+              and "feature/x" in pre["problems"][0] and "main" in pre["problems"][0], str(pre))
+        eq("options: worktree (recommended), checkout, abort",
+           ([o["id"] for o in pre["options"]], pre["recommended"]), (["worktree", "checkout", "abort"], "worktree"))
+        eq("gh users get gh pr checkout", pre["options"][1]["commands"], ["gh pr checkout 7"])
+        sr._pr_from_gh = lambda r, n: None
+        pre = sr.preflight(root, "pr", "7")
+        check("without a branch name, 'not in my history' is the test", pre["status"] == "wrong-branch"
+              and "not part of the branch" in pre["problems"][0], str(pre))
+        eq("commit on another branch -> wrong-branch", sr.preflight(root, "commit", sha["B"])["status"], "wrong-branch")
+        eq("branch asked for while on main -> wrong-branch", sr.preflight(root, "branch", "feature/x")["status"], "wrong-branch")
+        eq("main asked for while on main -> ok, nothing to diff against", sr.preflight(root, "branch", "main")["status"], "ok")
+        txt = sr.describe(sr.preflight(root, "pr", "7"))
+        check("the user-facing text lists every option and marks the recommended one",
+              "[worktree] (recommended)" in txt and "[checkout]" in txt and "[abort]" in txt, txt)
+
+        # --- the CLI contract the skill relies on ---
+        cli = [sys.executable, str(scripts / "scope_resolver.py")]
+        p = subprocess.run([*cli, "preflight", "--kind", "pr", "--value", "7", "--root", root],
+                           capture_output=True, text=True, encoding="utf-8")
+        eq("CLI: mismatch exits 7", p.returncode, 7)
+        eq("CLI: mismatch JSON has options", [o["id"] for o in json.loads(p.stdout)["options"]][:1], ["worktree"])
+        p = subprocess.run([*cli, "extract", "--prompt", "just run it", "--root", root], capture_output=True, text=True, encoding="utf-8")
+        eq("CLI: no scope exits 2", p.returncode, 2)
+        p = subprocess.run([*cli, "extract", "--prompt", "PR 7", "--root", root], capture_output=True, text=True, encoding="utf-8")
+        eq("CLI: scope found exits 0", (p.returncode, json.loads(p.stdout)["flags"]), (0, ["--pr", "7"]))
+
+        # --- worktree: the recommended option, carried out ---
+        wt = sr.make_worktree(root, "pr", "7")
+        check("worktree created next to the repo", "error" not in wt and Path(wt["path"]).is_dir(), str(wt))
+        eq("worktree is at the PR head", _sh(wt["path"], "rev-parse", "HEAD"), sha["C"])
+        eq("the PR now passes preflight inside the worktree", sr.preflight(wt["runDir"], "pr", "7")["status"], "ok")
+        eq("main checkout untouched", _sh(work, "rev-parse", "--abbrev-ref", "HEAD"), "main")
+        check("a second worktree for the same scope is refused", "already exists" in sr.make_worktree(root, "pr", "7").get("error", ""))
+        _sh(work, "worktree", "remove", "--force", wt["path"])
+
+        # --- run.py / wizard ---
+        env = dict(os.environ)
+        run_py = scripts / "run.py"
+        wiz = scripts / "mutation_wizard.py"
+        p = _run(run_py, work, env, "--pr", "7", "--run-id", "m1", "--skip-sonar")
+        eq("run.py on the wrong branch refuses (error exit)", p.returncode, 1)
+        g = json.loads((work / "mutation-reports" / "m1" / "gate.json").read_text(encoding="utf-8"))
+        check("run.py names SCOPE_MISMATCH and keeps the options", g["verdict"] == "ERROR"
+              and "SCOPE_MISMATCH" in g["error"] and g["scopePreflight"]["recommended"] == "worktree", str(g)[:600])
+        p = subprocess.run([sys.executable, str(wiz), "--pr", "7", "--run-id", "w1", "--skip-sonar"], cwd=str(work),
+                           capture_output=True, text=True, timeout=180, encoding="utf-8", errors="replace", env=env)
+        eq("wizard on the wrong branch exits 7", p.returncode, 7)
+        line = next((l for l in p.stdout.splitlines() if l.startswith("MUTATION_RESULT:")), "")
+        res = json.loads(line.split(":", 1)[1]) if line else {}
+        check("MUTATION_RESULT says SCOPE_MISMATCH with a recommendation",
+              res.get("verdict") == "SCOPE_MISMATCH" and res.get("recommended") == "worktree", p.stdout[-800:])
+        check("nothing was mutated", not (work / "mutation-reports" / "w1" / "results.json").exists())
+        p = subprocess.run([sys.executable, str(scripts / "final_report.py"), "--run-id", "w1"], cwd=str(work),
+                           capture_output=True, text=True, encoding="utf-8", env=env)
+        check("report relays the options and tells the caller not to choose",
+              "[worktree] (recommended)" in p.stdout and "never choose for them" in p.stdout
+              and p.stdout.rstrip().endswith("NEXT: STOP"), p.stdout)
+
+        # on the PR's branch: runs, scoped to exactly the PR's lines
+        _sh(work, "switch", "-q", "feature/x")
+        p = _run(run_py, work, env, "--pr", "7", "--run-id", "p1", "--skip-sonar")
+        out = p.stdout + p.stderr
+        check("run.py --pr runs on the right checkout", "scope: pr (PR #7" in out and p.returncode == 2, out[-1500:])
+        res = json.loads((work / "mutation-reports" / "p1" / "results.json").read_text(encoding="utf-8"))
+        eq("scope is the PR's files", sorted(res["target_files"]), ["app/calc.py", "app/util.py"])
+        eq("calc.py is scoped to the lines the PR added, not the whole file",
+           res["diff_map"]["app/calc.py"], [3, 4, 5, 6, 7, 8])
+        eq("--commit scopes to one commit", _scope_files(run_py, work, env, "c1", "--commit", sha["C"]), ["app/util.py"])
+        eq("--commit HEAD = the last commit", _scope_files(run_py, work, env, "c2", "--commit", "HEAD"), ["app/util.py"])
+
+        # the same through the wizard: --pr counts as an explicit scope (no local-changes override)
+        p = subprocess.run([sys.executable, str(wiz), "--pr", "7", "--run-id", "w2", "--skip-sonar"], cwd=str(work),
+                           capture_output=True, text=True, timeout=300, encoding="utf-8", errors="replace", env=env)
+        out = p.stdout + p.stderr
+        log = work / "mutation-reports" / "w2" / "mutation-wizard.log"
+        check("wizard honours --pr", log.exists() and "scope: pr" in log.read_text(encoding="utf-8")
+              and p.returncode == 2 and "SCOPE_MISMATCH" not in out, out[-1500:])
+    finally:
+        sr._pr_from_gh = real_gh
+
+
+# --- 17. round 2 is scored over the same changed lines as round 1 ----------------
+
+# PIT-like: mutants on EVERY line of the file, identified by bare file name only (no `file` key),
+# and a log of the productive lines each engine call was handed.
+_WHOLE_FILE_ENGINE = """
+import json, os
+def execute(profile, project_root, module, targets, reports_dir, timeout=1800,
+            quiet=True, log_path=None, productive_lines=None,
+            skip_install_check=False, test_files=None, narrow_tests=True, exclude_tests=()):
+    with open(os.path.join(project_root, "productive_seen.jsonl"), "a") as fh:
+        fh.write(json.dumps(productive_lines or {}) + "\\n")
+    muts = []
+    for source_file, _tid in targets:
+        for line in range(1, 9):
+            status = "KILLED" if line % 2 == 0 else "SURVIVED"
+            muts.append({"status": status, "detected": status == "KILLED", "line": line,
+                         "operator": "Math", "description": "stub", "class": "app.calc",
+                         "method": "m", "index": str(line),
+                         "source_file": source_file.rsplit("/", 1)[-1],
+                         "language": profile.language, "tool": profile.tool})
+    return 0, muts, None
+"""
+
+
+def test_verify_scoped_like_round_one(tmp):
+    print("\n[17] round 2 mutates and scores only the changed lines, like round 1")
+    import run as run_mod
+    # unit: PIT-style bare file names against a diff map keyed by repo-relative path
+    dm = {"impl/src/main/java/com/example/Calc.java": {3, 4}}
+    muts = [{"source_file": "Calc.java", "line": 3}, {"source_file": "Calc.java", "line": 43},
+            {"source_file": "Other.java", "line": 43}]
+    kept, dropped = run_mod._filter_to_diff_scope(muts, dm)
+    eq("bare file name matches the path-keyed diff map", ([m["line"] for m in kept], [m["line"] for m in dropped]),
+       ([3, 43], [43]))
+    check("the dropped mutant is the in-file one outside the diff", dropped[0]["source_file"] == "Calc.java")
+    check("a file the diff does not mention stays fail-open", any(m["source_file"] == "Other.java" for m in kept))
+    amb = {"a/x/Calc.java": {1}, "b/y/Calc.java": {2}}
+    kept, dropped = run_mod._filter_to_diff_scope(
+        [{"source_file": "Calc.java", "class": "y.Calc", "line": 1},
+         {"source_file": "Calc.java", "class": "y.Calc", "line": 2},
+         {"source_file": "Calc.java", "line": 1}], amb)
+    eq("two files share a name: the class path picks the right one", [m["line"] for m in dropped], [1])
+    check("two files share a name and nothing tells them apart: kept, not guessed", kept[-1]["line"] == 1 and len(kept) == 2)
+    eq("productive lines are cut to the diff, by path or bare name",
+       run_mod._scope_productive_to_diff({"app/calc.py": [1, 3, 5, 7], "app/new.py": [1, 2]},
+                                         {"app/calc.py": {3, 4, 5}, "new.py": None}),
+       {"app/calc.py": [3, 5], "app/new.py": [1, 2]})
+    eq("no diff map: productive lines untouched", run_mod._scope_productive_to_diff({"a.py": [1, 2]}, {}), {"a.py": [1, 2]})
+
+    # integration: commit B changed lines 3-8 of app/calc.py; the engine returns mutants on lines 1-8
+    work, scripts, sha = _scope_repo(tmp, "verify")
+    (scripts / "mutation_runners.py").write_text(_WHOLE_FILE_ENGINE, encoding="utf-8")
+    _git_commit(work, "stub engine")
+    env = dict(os.environ)
+    p = _run(scripts / "run.py", work, env, "--commit", sha["B"], "--run-id", "v1", "--skip-sonar", "--remediate")
+    out1 = p.stdout + p.stderr
+    res = json.loads((work / "mutation-reports" / "v1" / "results.json").read_text(encoding="utf-8"))
+    eq("round 1 scores only the diff's mutants (lines 5-8; 3-4 are blank, arid)", res["summary_before"]["total"], 4)
+    check("round 1 reported the others as outside the diff", "2 mutant(s) outside the diff" in out1, out1[-900:])
+    p = _run(scripts / "run.py", work, env, "--verify", "--run-id", "v1", "--round", "2", "--skip-sonar")
+    out2 = p.stdout + p.stderr
+    res = json.loads((work / "mutation-reports" / "v1" / "results.json").read_text(encoding="utf-8"))
+    eq("round 2 scores the same population as round 1", res["summary_after"]["total"], 4)
+    check("round 2 reported the others as outside the diff", "2 mutant(s) outside the diff" in out2, out2[-900:])
+    check("no survivor outside the diff reaches the test writer",
+          all(3 <= s["line"] <= 8 for s in res["survivors_after"]), str(res["survivors_after"]))
+    seen = [json.loads(l) for l in (work / "productive_seen.jsonl").read_text(encoding="utf-8").splitlines()]
+    eq("the verify engine call got the same productive lines as round 1", seen[1], seen[0])
+    check("those lines are inside the diff", all(3 <= ln <= 8 for ln in seen[1].get("app/calc.py", [])), str(seen))
+
+
 def main() -> int:
     print("=" * 66)
     print("  POLYGLOT MUTATION PIPELINE -- SELF TEST")
@@ -2431,6 +2759,8 @@ def main() -> int:
         test_sonar_circuit_breaker(tmp)
         test_sonar_upload(tmp)
         test_sonar_run_integration(tmp)
+        test_scope_resolution(tmp)
+        test_verify_scoped_like_round_one(tmp)
 
     failed = [r for r in _RESULTS if not r[1]]
     print("\n" + "=" * 66)
