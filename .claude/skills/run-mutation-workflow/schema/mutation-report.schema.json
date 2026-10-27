@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mutation-report.schema.json",
+  "title": "Mutation report (schemaVersion 1)",
+  "description": "Vendored copy of the contract with sonar-mutation-report-plugin. The plugin reads this file during the Sonar scan. Unknown fields are ignored by the plugin; unknown major schemaVersions are rejected. Scores and percentages are NOT sent: the plugin computes them from the counts. 'mutants' lists only diff-scoped SURVIVED / NO_COVERAGE mutants (they become Sonar issues).",
+  "type": "object",
+  "required": ["schemaVersion", "summary"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "run": {
+      "type": "object",
+      "properties": {
+        "runId": {"type": "string"},
+        "threshold": {"type": "number"},
+        "round": {"type": "integer"},
+        "verdict": {"type": "string"},
+        "tools": {"type": "array", "items": {"type": "string"}},
+        "agentVersion": {"type": "string"},
+        "commit": {"type": "string"},
+        "scoreBefore": {"type": "number", "minimum": 0, "maximum": 100, "description": "Optional. New-code mutation score of round 1, before the agent wrote any test (equals the final new-code score when no remediation ran). Percent, one decimal. Absent when round 1 had no score."},
+        "durationSec": {"type": "integer", "minimum": 0, "description": "Optional. Wall-clock seconds of the whole run: round 1 start to this report, including the test-writing round and any wait between the rounds. Absent when unknown."}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["overall"],
+      "properties": {
+        "overall": {"$ref": "#/$defs/counts"},
+        "new": {"$ref": "#/$defs/counts"}
+      }
+    },
+    "languages": {"type": "object", "additionalProperties": {"$ref": "#/$defs/scoped"}},
+    "files": {
+      "type": "object",
+      "additionalProperties": {
+        "allOf": [{"$ref": "#/$defs/scoped"}],
+        "type": "object",
+        "properties": {
+          "language": {"type": "string"},
+          "lines": {"type": "integer", "minimum": 0},
+          "changedLines": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "mutants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "line", "status"],
+        "properties": {
+          "file": {"type": "string"},
+          "line": {"type": "integer", "minimum": 1},
+          "operator": {"type": "string"},
+          "status": {"enum": ["SURVIVED", "NO_COVERAGE"]}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "counts": {
+      "type": "object",
+      "description": "total must be >= the sum of killed, timedOut, memoryError, survived, noCoverage, unknown. testsExecuted/testKills are absent when the engine reports no per-test data.",
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "killed": {"type": "integer", "minimum": 0},
+        "timedOut": {"type": "integer", "minimum": 0},
+        "memoryError": {"type": "integer", "minimum": 0},
+        "survived": {"type": "integer", "minimum": 0},
+        "noCoverage": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0},
+        "suppressed": {"type": "integer", "minimum": 0},
+        "testsExecuted": {"type": "integer", "minimum": 0},
+        "testKills": {"type": "integer", "minimum": 0}
+      }
+    },
+    "scoped": {
+      "type": "object",
+      "required": ["overall"],
+      "properties": {
+        "overall": {"$ref": "#/$defs/counts"},
+        "new": {"$ref": "#/$defs/counts"}
+      }
+    }
+  }
+}
