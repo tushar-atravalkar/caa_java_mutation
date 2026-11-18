@@ -4,6 +4,13 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <parent>
+        <groupId>com.example.platform</groupId>
+        <artifactId>platform-parent</artifactId>
+        <version>1.0.0</version>
+        <relativePath>parents/platform-parent/pom.xml</relativePath>
+    </parent>
+
     <groupId>com.example.calculator</groupId>
     <artifactId>calculator-parent</artifactId>
     <version>1.0.0</version>
@@ -15,13 +22,4 @@
     <modules>
         <module>impl</module>
     </modules>
-
-    <properties>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <junit.version>5.10.2</junit.version>
-        <pitest.version>1.15.8</pitest.version>
-        <pitest-junit5.version>1.2.1</pitest-junit5.version>
-    </properties>
 </project>
