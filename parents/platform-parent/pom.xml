@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example.platform</groupId>
+    <artifactId>platform-parent</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>Platform Parent</name>
+    <description>
+        Stand-in for a team/platform parent pom. Build conventions and the mutation-testing
+        profile live here, so the projects that inherit from it never declare the PIT plugin
+        themselves. It sits two folders below the repo root on purpose: the plugin's old
+        detection only looked at the repo's own poms (root and one level down).
+    </description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <junit.version>5.10.2</junit.version>
+        <pitest.version>1.15.8</pitest.version>
+        <pitest-junit5.version>1.2.1</pitest-junit5.version>
+    </properties>
+
+    <profiles>
+        <profile>
+            <id>mutation-testing</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-maven</artifactId>
+                        <version>${pitest.version}</version>
+                        <dependencies>
+                            <dependency>
+                                <groupId>org.pitest</groupId>
+                                <artifactId>pitest-junit5-plugin</artifactId>
+                                <version>${pitest-junit5.version}</version>
+                            </dependency>
+                        </dependencies>
+                        <configuration>
+                            <targetClasses>
+                                <param>com.example.calculator.*</param>
+                            </targetClasses>
+                            <targetTests>
+                                <param>com.example.calculator.*</param>
+                            </targetTests>
+                            <mutators>
+                                <mutator>ALL</mutator>
+                            </mutators>
+                            <outputFormats>
+                                <outputFormat>XML</outputFormat>
+                                <outputFormat>HTML</outputFormat>
+                            </outputFormats>
+                            <timestampedReports>false</timestampedReports>
+                            <threads>4</threads>
+                            <reportsDirectory>${project.basedir}/../pit-output</reportsDirectory>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

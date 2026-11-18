@@ -26,7 +26,7 @@ jobs:
         run: mvn -B test
 
       - name: Run mutation testing (PIT)
-        run: mvn -B org.pitest:pitest-maven:mutationCoverage
+        run: mvn -B -P mutation-testing org.pitest:pitest-maven:mutationCoverage
 
       - name: Download SonarQube Scanner
         run: |

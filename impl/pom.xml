@@ -14,7 +14,7 @@
     <packaging>jar</packaging>
 
     <name>Calculator</name>
-    <description>Sample Calculator project set up for mutation testing with PIT</description>
+    <description>Sample Calculator project; mutation testing comes from the parent's mutation-testing profile</description>
 
     <dependencies>
         <dependency>
@@ -32,57 +32,6 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
             </plugin>
-
-            <plugin>
-                <groupId>org.pitest</groupId>
-                <artifactId>pitest-maven</artifactId>
-                <version>${pitest.version}</version>
-                <dependencies>
-                    <dependency>
-                        <groupId>org.pitest</groupId>
-                        <artifactId>pitest-junit5-plugin</artifactId>
-                        <version>${pitest-junit5.version}</version>
-                    </dependency>
-                </dependencies>
-                <configuration>
-                    <targetClasses>
-                        <param>com.example.calculator.*</param>
-                    </targetClasses>
-                    <targetTests>
-                        <param>com.example.calculator.*</param>
-                    </targetTests>
-                    <mutators>
-                        <mutator>ALL</mutator>
-                    </mutators>
-                    <outputFormats>
-                        <outputFormat>HTML</outputFormat>
-                    </outputFormats>
-                    <timestampedReports>false</timestampedReports>
-                    <threads>4</threads>
-                </configuration>
-            </plugin>
         </plugins>
     </build>
-
-    <profiles>
-        <profile>
-            <id>mutation-testing</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.pitest</groupId>
-                        <artifactId>pitest-maven</artifactId>
-                        <version>${pitest.version}</version>
-                        <configuration>
-                            <outputFormats>
-                                <outputFormat>XML</outputFormat>
-                                <outputFormat>HTML</outputFormat>
-                            </outputFormats>
-                            <reportsDirectory>${project.basedir}/../pit-output</reportsDirectory>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
 </project>
